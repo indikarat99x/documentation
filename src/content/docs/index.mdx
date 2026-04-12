@@ -1,70 +1,41 @@
 ---
-title: Xianix — AI-DLC for Software Delivery
+title: Xianix — AI-DLC Agents for Software Delivery
 description: Humans and AI, working at 99x speed. The SDLC is becoming the AI-DLC — an AI-Driven Lifecycle where agents collaborate seamlessly so engineers can focus on work that only humans can do.
 template: splash
 hero:
   tagline: Humans and AI, working at 99x speed
   actions:
     - text: Get Started
-      link: /documentation/agent/overview/
+      link: /documentation/introduction/overview/
       icon: right-arrow
-    - text: Meet the Agents
-      link: /documentation/plugins/overview/
-      icon: list-format
+    - text: Home Page
+      link: https://xianix.ai
+      icon: external
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+## What is Xianix?
+
+Xianix is a deployable, extensible agent built for the [Xians ACP](https://xians.ai) (Agent Control Plane). It lets you assemble purpose-built AI workers — powered by Claude Code plugins — to automate key stages of your software delivery lifecycle, from PR review and requirement analysis to any custom workflow you define.
+
+Under the hood, it is a long-running .NET console application that bridges your code platform (GitHub, Azure DevOps) with AI-powered automation. It listens for webhook events, evaluates a declarative rules engine, and orchestrates isolated Docker containers that run Claude Code plugins against your repositories.
 
 ## From SDLC to AI-DLC
 
-The SDLC is becoming the **AI-DLC**: an AI-Driven Lifecycle where agents in a coordinated mesh collaborate seamlessly, so your engineers can focus on work that only humans can do. GitHub & Azure DevOps · Claude-powered · Docker-ready · Open Source.
-
 Retrofitting AI into an unchanged delivery process often creates more noise than value. Better results come from shorter feedback loops, clearer handoffs, and explicit human accountability. Xianix connects AI directly to delivery tools, keeps feedback tight, and places people at the decision points that matter.
 
-## The Agent Team
+Specialized plugins support the delivery flow — each with a clear trigger, a defined output, and an explicit human checkpoint. You can use the official plugins (PR Reviewer, Requirement Analyst, and more) or build your own to fit any workflow.
 
-Five specialized agents support the delivery flow, each with a clear trigger, a defined output, a simple definition of done, and an explicit human checkpoint. Shared artifacts — not tight runtime coupling — are what make this a team: backlog context flows into design, design and implementation flow into review, review feeds testing, and approved change signals feed release preparation.
+## How it works
 
-<CardGrid stagger>
-	<Card title="Requirement Analyst" icon="document">
-		Clarifies backlog items into structured requirements with acceptance criteria, edge cases, and targeted questions. Triggered when a new backlog item is created.
+1. A webhook arrives from GitHub or Azure DevOps (e.g. a pull request is opened).
+2. The agent matches the event against your rules and identifies which plugin to run.
+3. An isolated Docker container executes the plugin and posts results back to the platform.
+4. A human reviews the output and decides next steps.
 
-		[Learn more →](/plugins/req-analyst/overview/)
-	</Card>
-	<Card title="Technical Designer" icon="pencil">
-		Turns a groomed backlog item into an implementation spec with affected components, interfaces, and testing expectations. Triggered when a story is moved into a sprint.
+## Key principles
 
-		[Learn more →](/agent/overview/)
-	</Card>
-	<Card title="PR Reviewer" icon="approve-check">
-		Checks every pull request against requirements, architecture, code quality, and risk before human sign-off. Posts structured findings categorized by severity.
-
-		[Learn more →](/plugins/pr-reviewer/overview/)
-	</Card>
-	<Card title="Test Planner" icon="list-format">
-		Prioritizes the highest-risk test scenarios and highlights gaps in automated coverage before merge. Triggered after a PR passes initial checks.
-
-		[Learn more →](/agent/overview/)
-	</Card>
-	<Card title="Release Manager" icon="rocket">
-		Compiles release notes, checks readiness across completed work, flags breaking changes, and surfaces rollout concerns for human approval.
-
-		[Learn more →](/agent/overview/)
-	</Card>
-	<Card title="Build Your Own Plugins" icon="puzzle">
-		The same agent pattern applies to any workflow. Define the prompt, connect the right tools and trigger, and keep human review at decision points that carry product or release risk.
-
-		[Plugin development →](/plugin-development/overview/)
-	</Card>
-</CardGrid>
-
-## Human judgment as the control point
-
-In AI-DLC, people do not disappear from the process — their role becomes clearer: set direction, add context, and decide when AI output is good enough to move forward.
-
-| AI suggests | Human decides |
-|---|---|
-| Detailed work plan — breaks an intent into tasks and sub-tasks | Adds context, removes work that doesn't support the goal |
-| Architectural options — sync vs. async, storage choices, service boundaries | Reviews key decisions based on risk, cost, and team knowledge |
-| Step-by-step directions — implementation steps, test ideas, next actions | Keeps work on course and corrects direction when needed |
+- **Human-in-the-loop** — AI suggests, humans decide. People set direction, add context, and approve outputs at every checkpoint.
+- **Plugin-based** — Each capability (review, analysis, planning) is a standalone Claude Code plugin, easy to swap, extend, or replace.
+- **Platform-native** — Works directly with GitHub and Azure DevOps webhooks, PRs, and work items.
+- **Isolated execution** — Every task runs in an ephemeral Docker container with no persistent state.

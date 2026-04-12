@@ -1,159 +1,64 @@
 ---
 title: Plugin Structure
-description: How to build a Xianix plugin — directory layout, required files, and available extension points.
+description: How Xianix plugins map to the Claude Code plugin format and where to find detailed development guidance.
 ---
 
-Xianix plugins are Claude Code plugins — self-contained directories that extend what the agent can do when it runs against a repository. Each plugin follows a standard structure that the Xianix executor knows how to install and invoke.
+Xianix plugins are standard [Claude Code plugins](https://code.claude.com/docs/en/plugins) — self-contained directories that extend what the agent can do when it runs against a repository. Because the format is defined by Claude Code, the upstream documentation is the authoritative reference for building plugins.
 
 ---
 
-## Directory Layout
+## Quick Reference
+
+A minimal plugin looks like this:
 
 ```
 plugin-name/
 ├── .claude-plugin/
 │   └── plugin.json      # Plugin metadata (required)
-├── .mcp.json            # MCP server configuration (optional)
-├── commands/            # Slash commands (optional)
-├── agents/              # Sub-agent definitions (optional)
-├── skills/              # Skill definitions (optional)
-├── hooks/               # Lifecycle hooks (optional)
-├── providers/           # Provider-specific configuration (optional)
-├── styles/              # Output style definitions (optional)
-└── README.md            # Documentation
+├── commands/            # Slash commands
+├── skills/              # Skill definitions
+├── hooks/               # Lifecycle hooks
+├── providers/           # Provider-specific configuration
+└── README.md
 ```
 
----
+For the full specification of each directory, manifest fields, and available extension points, see the official docs:
 
-## `plugin.json` (required)
-
-The plugin manifest. Located at `.claude-plugin/plugin.json`.
-
-```json
-{
-  "name": "my-plugin",
-  "version": "1.0.0",
-  "description": "A brief description of what this plugin does.",
-  "author": {
-    "name": "Your Name",
-    "email": "you@example.com",
-    "url": "https://github.com/your-org"
-  },
-  "homepage": "https://github.com/your-org/my-plugin",
-  "repository": "https://github.com/your-org/my-plugin",
-  "license": "MIT",
-  "keywords": ["example", "review"],
-  "commands": ["./commands/my-command.md"],
-  "skills": "./skills/",
-  "hooks": "./hooks/hooks.json",
-  "outputStyles": "./styles/",
-  "providers": "./providers/"
-}
-```
-
-| Field | Required | Description |
-|---|---|---|
-| `name` | Yes | Plugin identifier (lowercase, hyphens only) |
-| `version` | Yes | Semver version string |
-| `description` | Yes | One-line description |
-| `commands` | No | Array of paths to command markdown files |
-| `skills` | No | Path to skills directory |
-| `hooks` | No | Path to hooks config JSON |
-| `outputStyles` | No | Path to output style definitions |
-| `providers` | No | Path to provider-specific config |
+- [Plugin development guide](https://code.claude.com/docs/en/plugins) — creating, testing, and distributing plugins
+- [Plugins reference](https://code.claude.com/docs/en/plugins-reference) — detailed schema and field descriptions
 
 ---
 
-## Commands
+## Xianix-Specific Conventions
 
-Slash commands are markdown files that define a prompt Claude runs when invoked. Place them in `commands/`.
+While the plugin format itself is standard Claude Code, Xianix plugins follow a few additional conventions:
 
-```markdown
----
-description: Review the current pull request
-allowed-tools:
-  - Bash
-  - WebSearch
----
-
-Review the pull request at the current HEAD. Check for:
-- Code quality issues
-- Security vulnerabilities
-- Missing tests
-- Performance concerns
-
-Post findings as review comments.
-```
-
-The command is invoked as `/my-command` in the Claude chat.
-
----
-
-## Hooks
-
-Hooks run shell scripts at specific lifecycle points. Defined in `hooks/hooks.json`:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/validate-prerequisites.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-| Hook | When it runs |
+| Convention | Detail |
 |---|---|
-| `PreToolUse` | Before a tool is invoked |
-| `PostToolUse` | After a tool completes |
+| **Providers** | Place platform-specific instructions in `providers/github.md`, `providers/azure-devops.md`, etc. The executor selects the correct provider based on the configured platform. |
+| **Output Styles** | Define output formatting templates in `styles/` to control how the plugin formats results (e.g., review report structure). |
 
 ---
 
-## Providers
+## Where to Host Your Plugin
 
-Provider files contain platform-specific instructions. Place them in `providers/` as markdown files:
+You can develop and host plugins **anywhere** — the plugin does not need to live in the official Xianix marketplace. Any git repository (public or private) that follows the Claude Code plugin structure works.
 
-- `providers/github.md` — GitHub-specific instructions
-- `providers/azure-devops.md` — Azure DevOps-specific instructions
-- `providers/generic.md` — Fallback for other platforms
-
----
-
-## Styles
-
-Output style definitions in `styles/` control how the plugin formats its output. These are markdown or JSON files that describe the expected structure of results (e.g., review report format).
-
----
-
-## MCP Configuration
-
-If your plugin needs external tools (APIs, databases, search), configure MCP servers in `.mcp.json`:
+To use a plugin hosted in your own repository, point to it via the [`use-plugins`](/agent-configuration/rules/#4-use-plugins--plugin-installation) section in your `rules.json`:
 
 ```json
-{
-  "mcpServers": {
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
-      }
-    }
+"use-plugins": [
+  {
+    "plugin-name": "my-plugin@my-marketplace",
+    "marketplace": "your-org/your-plugins-repo"
   }
-}
+]
 ```
+
+If you'd like to contribute to the **official** Xianix plugin collection, submit a pull request to [`xianix-team/plugins-official`](https://github.com/xianix-team/plugins-official). See the [Marketplace](/plugin-development/marketplace/) page for details.
 
 ---
 
 ## Reference Implementation
 
-The [`pr-reviewer`](https://github.com/xianix-team/xianix-plugins-official/tree/main/plugins/pr-reviewer) plugin is a full reference implementation that uses commands, hooks, providers, and styles. Study it when building a new plugin.
+The [`pr-reviewer`](https://github.com/xianix-team/plugins-official/tree/main/plugins/pr-reviewer) plugin is a full reference implementation that uses commands, hooks, providers, and styles. Study it when building a new plugin.

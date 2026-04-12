@@ -29,50 +29,37 @@ export default defineConfig({
 	integrations: [
 		mermaid({ autoTheme: true }),
 		starlight({
-			title: 'Xianix AI-DLC Docs',
+			title: 'Xianix Documentation',
 			description: 'AI-powered automation for your development lifecycle.',
 			social: [
-				{ icon: 'github', label: 'GitHub', href: 'https://github.com/99x' },
+				{ icon: 'github', label: 'GitHub', href: 'https://github.com/xianix-team' },
 			],
 			sidebar: [
 				{
-					label: 'The Agent',
+					label: 'Introduction',
 					items: [
-				{ label: 'Overview', slug: 'agent/overview' },
-					{ label: 'Architecture', slug: 'agent/architecture' },
+				{ label: 'Overview', slug: 'introduction/overview' },
+					{ label: 'Architecture', slug: 'introduction/architecture' },
 					],
 				},
 				{
-					label: 'Agent Installation',
+					label: 'Agent Configuration',
 					items: [
-					{ label: 'Prerequisites', slug: 'agent-installation/prerequisites' },
-					{ label: 'Quick Start', slug: 'agent-installation/quickstart' },
-					{ label: 'Rules Configuration', slug: 'agent-installation/rules' },
-					{ label: 'Configuration Reference', slug: 'agent-installation/configuration' },
+					{ label: 'Prerequisites', slug: 'agent-configuration/prerequisites' },
+				{ label: 'Quick Start', slug: 'agent-configuration/quickstart' },
+				{ label: 'Azure DevOps Setup', slug: 'agent-configuration/azure-devops' },
+				{ label: 'GitHub Setup', slug: 'agent-configuration/github' },
+				{ label: 'Rules Configuration', slug: 'agent-configuration/rules' },
 					],
 				},
-				{
-					label: 'Plugins',
-					items: [
-						{ label: 'Marketplace Overview', slug: 'plugins/overview' },
-						{
-							label: 'PR Reviewer',
-							items: [
-								{ label: 'Overview', slug: 'plugins/pr-reviewer/overview' },
-								{ label: 'Platform Setup', slug: 'plugins/pr-reviewer/platform-setup' },
-								{ label: 'Git Authentication', slug: 'plugins/pr-reviewer/git-auth' },
-							],
-						},
-						{
-							label: 'Requirement Analyst',
-							items: [
-								{ label: 'Overview', slug: 'plugins/req-analyst/overview' },
-								{ label: 'MCP Configuration', slug: 'plugins/req-analyst/mcp-config' },
-								{ label: 'Backlog Setup', slug: 'plugins/req-analyst/backlog-setup' },
-							],
-						},
-					],
-				},
+			{
+				label: 'Official Plugins',
+				items: [
+					{ label: 'Marketplace Overview', slug: 'official-plugins/overview' },
+					{ label: 'PR Reviewer', slug: 'official-plugins/pr-reviewer' },
+					{ label: 'Requirement Analyst', slug: 'official-plugins/req-analyst' },
+				],
+			},
 				{
 					label: 'Plugin Development',
 					items: [
@@ -80,20 +67,18 @@ export default defineConfig({
 						{ label: 'Marketplace', slug: 'plugin-development/marketplace' },
 					],
 				},
-				{
-					label: 'Agent Development',
-					items: [
-					{ label: 'Overview', slug: 'agent-development/overview' },
-					{ label: 'Setup', slug: 'agent-development/setup' },
-					{ label: 'Executor', slug: 'agent-development/executor' },
-					{ label: 'Tenant Isolation', slug: 'agent-development/tenant-isolation' },
-					{ label: 'Project Structure', slug: 'agent-development/project-structure' },
-					{ label: 'Workflows & Activities', slug: 'agent-development/workflows-and-activities' },
-					{ label: 'Testing', slug: 'agent-development/testing' },
-					{ label: 'Azure Deployment', slug: 'agent-development/azure-deployment' },
-					{ label: 'Contributing', slug: 'agent-development/contributing' },
-					],
-				},
+			{
+				label: 'Agent Development',
+				items: [
+				{ label: 'Overview', slug: 'agent-development/overview' },
+				{ label: 'Getting Started', slug: 'agent-development/getting-started' },
+				{ label: 'How It Works', slug: 'agent-development/how-it-works' },
+				{ label: 'The Executor', slug: 'agent-development/executor' },
+				{ label: 'Extending the Agent', slug: 'agent-development/extending' },
+				{ label: 'Deployment', slug: 'agent-development/deployment' },
+				{ label: 'Contributing', slug: 'agent-development/contributing' },
+				],
+			},
 			],
 		}),
 	],

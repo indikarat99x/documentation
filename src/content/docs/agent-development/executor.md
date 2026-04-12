@@ -1,142 +1,102 @@
 ---
-title: Executor
-description: The xianix-executor Docker image — how it works, environment variables, and concurrency model.
+title: The Executor
+description: How the xianix-executor Docker image clones repos, installs plugins, and runs Claude Code prompts.
 ---
 
-The `xianix-executor` Docker image runs inside an isolated container per tenant event. It maintains a bare clone of the target Git repository on a persistent volume, creates an isolated git worktree per execution, installs Claude Code plugins, and runs a prompt against the codebase. Results are returned via **stdout** as structured JSON; progress logs go to **stderr**.
+The `xianix-executor` is a short-lived Docker container that does the actual work. Each container clones (or fetches) a Git repository, installs Claude Code plugins, runs a prompt against the codebase, and returns a structured JSON result via stdout.
 
-## Files
+## What's Inside
+
+The executor image is built on Python 3.12 slim with Node.js 20, and includes `git`, `gh` CLI, Azure CLI, and the Claude Code CLI + SDK.
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | Image definition — Python 3.12, Node.js 20, git, gh CLI, Claude Code CLI + SDK |
-| `entrypoint.sh` | Bare-clone-or-fetch + worktree creation + plugin install + launches `execute_plugin.py` |
-| `execute_plugin.py` | Invokes Claude Code SDK against the worktree; writes JSON result to stdout |
-| `requirements.txt` | Python dependencies (pinned) |
+| `entrypoint.sh` | Git bare-clone/fetch, worktree creation, plugin install, launches Python |
+| `execute_plugin.py` | Calls the Claude Code SDK, streams messages, writes JSON result to stdout |
+| `requirements.txt` | Pinned Python dependencies |
 
-## Building the Image
+## Execution Flow
+
+```
+1. Read XIANIX_INPUTS → extract repository-url, platform, branch
+2. Configure git credentials (GitHub PAT or Azure DevOps PAT)
+3. Bare clone (first run) or git fetch (subsequent runs)
+4. Create isolated git worktree: /workspace/exec-<EXECUTION_ID>/
+5. Install Claude Code plugins from CLAUDE_CODE_PLUGINS
+6. Run execute_plugin.py with the interpolated PROMPT
+7. Write JSON result to stdout; progress to stderr
+8. Clean up worktree on exit
+```
+
+## Concurrency Model
+
+The executor uses **git worktrees** to support concurrent executions against the same repo:
+
+```
+/workspace/repo/              ← bare clone (persistent volume, shared)
+/workspace/exec-<exec-id>/    ← isolated worktree per execution (ephemeral)
+```
+
+Multiple containers can mount the same volume simultaneously. Each creates its own worktree, runs independently, and cleans up on exit. Orphaned worktrees from crashed containers are pruned on the next run.
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `TENANT_ID` | Yes | Tenant identifier for logging |
+| `EXECUTION_ID` | Yes | Unique ID per execution (used as worktree name) |
+| `XIANIX_INPUTS` | Yes | JSON object — must include `repository-url` |
+| `CLAUDE_CODE_PLUGINS` | Yes | JSON array of plugin descriptors |
+| `PROMPT` | Yes | Fully interpolated prompt to execute |
+| `ANTHROPIC_API_KEY` | Yes | Anthropic API key |
+| `GITHUB_TOKEN` | Conditional | GitHub PAT (injected when available) |
+| `AZURE_DEVOPS_TOKEN` | Conditional | Azure DevOps PAT (when `platform=azuredevops`) |
+
+## Output Format
+
+The executor writes a single JSON object to stdout that `ProcessingWorkflow` parses:
+
+```json
+{
+  "status": "success",
+  "result": "...",
+  "cost_usd": 0.042,
+  "input_tokens": 12500,
+  "output_tokens": 3200,
+  "session_id": "sess_abc123"
+}
+```
+
+Progress messages go to stderr.
+
+## Building Locally
 
 ```bash
 cd Executor/
 docker build -t xianix-executor:latest .
 ```
 
-## Running Locally for Testing
-
-The image expects all configuration via environment variables:
+## Testing Locally
 
 ```bash
 docker run --rm \
   -e TENANT_ID=local-test \
   -e EXECUTION_ID=test-001 \
-  -e 'XIANIX_INPUTS={"repository-url":"https://github.com/your-org/your-repo","platform":"github","pr-head-branch":"feature/foo"}' \
-  -e CLAUDE_CODE_PLUGINS='[{"name":"github","url":"github@claude-plugins-official","marketplace":"anthropics/claude-plugins-official"}]' \
-  -e PROMPT="Review this repository and summarize the architecture." \
+  -e 'XIANIX_INPUTS={"repository-url":"https://github.com/org/repo","platform":"github"}' \
+  -e CLAUDE_CODE_PLUGINS='[]' \
+  -e PROMPT="Summarize this repository." \
   -e ANTHROPIC_API_KEY=sk-ant-... \
   -e GITHUB_TOKEN=ghp_... \
   -v xianix-test-vol:/workspace/repo \
   xianix-executor:latest
 ```
 
-### Persistent Volume Across Runs
-
-The `/workspace/repo` mount holds a **bare git clone**. On first run the repo is cloned; subsequent runs do a fast `git fetch`. Each execution creates an isolated git worktree from the bare repo — multiple concurrent executions against the same volume are safe.
+Separate stdout and stderr:
 
 ```bash
-docker volume create xianix-test-vol
-
-# First run — bare clone + worktree
-docker run --rm -e ... -v xianix-test-vol:/workspace/repo xianix-executor:latest
-
-# Second run — fetch + new worktree (previous clone reused)
-docker run --rm -e ... -v xianix-test-vol:/workspace/repo xianix-executor:latest
+docker run ... xianix-executor:latest 1>result.json 2>progress.log
 ```
 
-### Capturing stdout vs stderr
+## Next Step
 
-```bash
-docker run ... xianix-executor:latest \
-  1>result.json \
-  2>progress.log
-
-cat result.json   # structured JSON from the executor
-cat progress.log  # git + plugin + executor progress messages
-```
-
-## Environment Variables Reference
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `TENANT_ID` | Yes | Identifies the tenant for logging and isolation |
-| `EXECUTION_ID` | Yes | Unique per-execution ID, used as the git worktree name |
-| `XIANIX_INPUTS` | Yes | JSON object with dynamic inputs (must include `repository-url`) |
-| `CLAUDE_CODE_PLUGINS` | Yes | JSON array of `{ name, url, marketplace?, envs? }` plugin descriptors |
-| `PROMPT` | Yes | Fully interpolated Claude Code prompt to execute |
-| `ANTHROPIC_API_KEY` | Yes | Anthropic API key (read by the Claude Code SDK) |
-| `GITHUB_TOKEN` | Conditional | GitHub PAT — always injected when available (clones, marketplace repos, `gh` CLI) |
-| `AZURE_DEVOPS_TOKEN` | Conditional | Azure DevOps PAT — injected when `platform=azuredevops` |
-
-### Inputs Extracted from `XIANIX_INPUTS`
-
-| Key | Used for |
-|-----|----------|
-| `repository-url` | Git clone/fetch target (required) |
-| `platform` | Credential selection: `github` (default) or `azuredevops` |
-| `pr-head-branch` | Optional ref to check out via worktree |
-
-## Concurrency Model
-
-The executor uses **git worktrees** to support concurrent execution against the same tenant+repo volume:
-
-```
-/workspace/repo/              ← bare clone (shared object store, on volume)
-/workspace/exec-<exec-id>/    ← isolated worktree per execution (ephemeral)
-```
-
-Multiple containers can mount the same volume simultaneously. Each creates its own worktree from the shared bare repo, runs independently, and cleans up its worktree on exit. Orphaned worktrees from crashed containers are pruned on the next run.
-
-## Publishing to Docker Hub
-
-The image is published to **`99xio/xianix-executor`** on Docker Hub via a GitHub Actions workflow.
-
-### Automatic Publishing (CI)
-
-The workflow triggers on version tags:
-
-```bash
-VERSION=v1.0.0
-git tag $VERSION
-git push origin $VERSION
-```
-
-This produces multi-arch images (`linux/amd64` + `linux/arm64`) with semver tags:
-
-| Git tag | Docker Hub tags |
-|---------|-----------------|
-| `v1.2.3` | `1.2.3`, `1.2`, `1`, `latest` |
-| `v2.0.0-beta.1` | `2.0.0-beta.1` (no `latest`) |
-
-### Manual Publishing
-
-```bash
-cd Executor/
-
-# Build for the current platform
-docker build -t 99xio/xianix-executor:latest .
-docker push 99xio/xianix-executor:latest
-
-# Multi-arch build (requires buildx)
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  -t 99xio/xianix-executor:1.0.0 \
-  -t 99xio/xianix-executor:latest \
-  --push .
-```
-
-### Pulling the Image
-
-```bash
-docker pull 99xio/xianix-executor:latest
-```
-
-The control plane defaults to `99xio/xianix-executor:latest` (configurable via the `EXECUTOR_IMAGE` environment variable).
+Ready to make changes? See [Extending the Agent](/agent-development/extending/).

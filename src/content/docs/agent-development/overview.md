@@ -1,45 +1,90 @@
 ---
 title: Overview
-description: Introduction to developing and extending the Xianix Agent codebase.
+description: What the Xianix Agent is, how it's built, and how the pieces fit together.
 ---
 
-The Xianix Agent is a .NET 8 console application built around [Temporal](https://temporal.io/) workflows (via the Xians platform SDK). It is deliberately small and easy to extend — the core pipeline is a few hundred lines of code, and most customisation happens in `rules.json` without touching the agent at all.
+The Xianix Agent is a .NET 10 application that listens for webhook events from GitHub and Azure DevOps, evaluates them against a set of rules, and — when a rule matches — spins up an isolated Docker container to run an AI-powered task against the target repository.
 
-This section covers the internals for developers who want to extend the agent itself: adding new workflows, activities, orchestration logic, or contributing fixes upstream.
+Think of it as a pipeline: **webhook in → rules match → container runs → results out**.
+
+## Architecture at a Glance
+
+```
+Webhook (GitHub / Azure DevOps)
+        │
+        ▼
+┌─────────────────────────────────┐
+│  Xianix Agent (.NET 10)        │
+│                                 │
+│  XianixAgent                    │
+│    └─ OnWebhook                 │
+│         └─ EventOrchestrator    │
+│              └─ RulesEvaluator  │  ← reads rules.json from Xians Knowledge
+│                    │            │
+│         (per match)│            │
+│                    ▼            │
+│         ProcessingWorkflow      │
+│           └─ ContainerActivities│  ← Docker API
+└────────────────────┬────────────┘
+                     │
+            Docker Engine
+                     │
+        ┌────────────▼────────────┐
+        │  xianix-executor        │
+        │  (ephemeral container)  │
+        │                         │
+        │  git clone/fetch        │
+        │  install plugins        │
+        │  run Claude Code prompt │
+        │                         │
+        │  stdout → JSON result   │
+        └─────────────────────────┘
+```
 
 ## Tech Stack
 
 | Layer | Technology |
 |---|---|
-| Runtime | .NET 8 |
-| Workflow engine | Temporal (via Xians platform SDK) |
-| Dependency injection | `Microsoft.Extensions.DependencyInjection` |
-| Logging | `Microsoft.Extensions.Logging` + console |
+| Runtime | .NET 10 |
+| Workflows | Temporal (via Xians platform SDK) |
+| DI | `Microsoft.Extensions.DependencyInjection` |
 | Container management | `Docker.DotNet` |
-| Environment config | `DotNetEnv` |
-| Test framework | xUnit + NSubstitute |
+| Env config | `DotNetEnv` |
+| Tests | xUnit + NSubstitute |
 
-## Key Concepts
+## Project Structure
 
-**Workflows** are long-running Temporal state machines. The agent has two:
+```
+the-agent/
+├── TheAgent/                     # .NET control plane
+│   ├── Program.cs                # Entry point — DI, startup
+│   ├── EnvConfig.cs              # Typed env-var accessors
+│   ├── Constants.cs              # Agent name, well-known strings
+│   ├── Agent/
+│   │   └── XianixAgent.cs        # Registers agent, configures webhooks
+│   ├── Orchestrator/
+│   │   └── EventOrchestrator.cs  # Routes webhooks → rules → workflows
+│   ├── Rules/
+│   │   └── WebhookRulesEvaluator.cs  # Evaluates rules.json
+│   ├── Workflows/
+│   │   └── ProcessingWorkflow.cs # Single-event lifecycle
+│   ├── Activities/
+│   │   └── ContainerActivities.cs # Docker container lifecycle
+│   └── Knowledge/
+│       └── rules.json            # Default rules (uploaded to Xians)
+│
+├── TheAgent.Tests/               # xUnit tests
+│
+├── Executor/                     # Executor Docker image
+│   ├── Dockerfile
+│   ├── entrypoint.sh             # Git clone/fetch, plugin install
+│   ├── execute_plugin.py         # Claude Code SDK runner
+│   └── requirements.txt
+│
+├── Docs/                         # Internal design docs
+└── TestScripts/                  # Webhook simulation scripts
+```
 
-- `ActivationWorkflow` — runs indefinitely, receives webhook signals, and fans out to `ProcessingWorkflow` instances.
-- `ProcessingWorkflow` — handles a single event end-to-end: create volume → start container → wait → collect output → cleanup.
+## Next Step
 
-**Activities** are the side-effectful steps that workflows orchestrate. The agent's only activity class is `ContainerActivities`, which manages the Docker container lifecycle.
-
-**Orchestrator** sits between the webhook handler and the workflow layer. `EventOrchestrator` calls `WebhookRulesEvaluator` to match the incoming event against `rules.json`, extracts inputs, and builds the `OrchestrationResult` that gets signalled to `ActivationWorkflow`.
-
-**Rules Evaluator** is a pure stateless component that reads `rules.json` from Xians Knowledge and evaluates filter expressions, extracts payload values, and resolves plugins and prompts. It is the only component with no Temporal dependency and is therefore straightforward to unit-test.
-
-## Where to Start
-
-| Goal | Where to look |
-|---|---|
-| Change what happens when a webhook fires | `rules.json` — no code change needed |
-| Add a new webhook event type | `rules.json` + optionally extend `WebhookRulesModels.cs` |
-| Add a new Temporal activity | `TheAgent/Activities/` |
-| Change the container lifecycle | `ContainerActivities.cs` + `ProcessingWorkflow.cs` |
-| Add a new workflow | `TheAgent/Workflows/` + register in `XianixAgent.cs` |
-| Add a new conversational tool | `MafSubAgentTools.cs` |
-| Change environment variable handling | `EnvConfig.cs` |
+Head to [Getting Started](/agent-development/getting-started/) to clone the repo and run the agent locally.
