@@ -78,13 +78,18 @@ The platform (GitHub, Azure DevOps, etc.) is **auto-detected** from `git remote`
 
 | Variable | Platform | Required | Purpose |
 |---|---|---|---|
-| `GH_TOKEN` / `GITHUB_TOKEN` | GitHub | Yes | Authenticate `gh` CLI for fetching PR data and posting comments |
-| `GIT_TOKEN` | GitHub / Generic | Only with `--fix` | HTTPS push credentials for committing fixes |
+| `GITHUB_TOKEN` | GitHub | Yes | Authenticate `gh` CLI for fetching PR data and posting comments |
 | `AZURE_DEVOPS_TOKEN` | Azure DevOps | Yes | PAT for REST API calls and git push |
 
-:::tip
-You can export these in your shell or place them in a project-root `.env` file and run `source .env && claude`.
-:::
+### GitHub Token Permissions
+
+The `GITHUB_TOKEN` requires the following repository permissions:
+
+| Permission | Access | Why it's needed |
+|---|---|---|
+| **Contents** | Read | Access repository contents, commits, branches, downloads, releases, and merges |
+| **Metadata** | Read | Search repositories, list collaborators, and access repository metadata |
+| **Pull requests** | Read & Write | Fetch pull request diffs and context, post review comments, and access related assignees, labels, milestones, and merges |
 
 ---
 
@@ -149,10 +154,7 @@ All triggers require the agent (`xianix-agent`) to be listed as a reviewer on th
   "use-plugins": [
     {
       "plugin-name": "pr-reviewer@xianix-plugins-official",
-      "marketplace": "xianix-team/plugins-official",
-      "envs": [
-        { "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB_TOKEN" }
-      ]
+      "marketplace": "xianix-team/plugins-official"
     }
   ],
   "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."

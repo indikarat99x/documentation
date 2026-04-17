@@ -130,6 +130,23 @@ Six operators are supported. All string comparisons are case-sensitive and ordin
 
 `^=`, `!^=`, `*=`, and `!*=` only match **string** values — they never match numbers, booleans, or `null`.
 
+Two additional **unary** operators check whether a path exists (resolves to a non-null value) without comparing against a right-hand side:
+
+| Operator | Meaning                                              | Missing path returns |
+|----------|------------------------------------------------------|----------------------|
+| `?`      | Exists — path resolves and value is not `null`       | `false`              |
+| `!?`     | Not exists — path is missing or value is `null`      | `true`               |
+
+Unary operators are appended directly to the path with no value on the right:
+
+```jsonc
+// Passes when the payload has a non-null "pull_request.title"
+"rule": "pull_request.title?"
+
+// Passes when the payload does NOT have a "pull_request.draft" field (or it is null)
+"rule": "pull_request.draft!?"
+```
+
 ### Compound Expressions
 
 Multiple conditions can be combined in a single rule using `&&` (AND) and `||` (OR):
@@ -216,7 +233,7 @@ For **filter rules** (`match-any`), a path segment `*` means "any element of the
 resource.reviewers.*.displayName=='xianix-agent'
 ```
 
-This passes if **any** reviewer object has `displayName` equal to `xianix-agent`. The wildcard works with all six operators:
+This passes if **any** reviewer object has `displayName` equal to `xianix-agent`. The wildcard works with all operators:
 
 ```
 // passes if any label name starts with "hotfix/"
@@ -224,6 +241,9 @@ labels.*.name^='hotfix/'
 
 // passes if any message in the thread contains a keyword
 comments.*.body*='needs review'
+
+// passes if any reviewer has a non-null "email" field
+resource.reviewers.*.email?
 ```
 
 Only **one** `*` segment per path is supported.
@@ -263,6 +283,24 @@ Match free-form text fields like commit messages, PR titles, or notification mes
 "rule": "pull_request.body!*=[WIP]"
 ```
 
+**Exists (`?` / `!?`)**
+
+Check whether a field is present (and non-null) in the payload — useful for optional fields that aren't always sent:
+
+```jsonc
+// Only trigger when the payload carries a pull_request object
+"rule": "action==opened&&pull_request?"
+
+// Trigger when a reviewer has been assigned (field present)
+"rule": "requested_reviewer.login?"
+
+// Skip payloads that have no body text
+"rule": "pull_request.body?"
+
+// Only match when the milestone is NOT set
+"rule": "pull_request.milestone!?"
+```
+
 ---
 
 ## 3. `use-inputs` — Payload Extraction
@@ -272,16 +310,19 @@ Extracts values from the webhook payload into named variables. They are used for
 ```json
 "use-inputs": [
   { "name": "pr-number",      "value": "number" },
-  { "name": "repository-url", "value": "repository.clone_url" },
+  { "name": "repository-url", "value": "repository.clone_url", "mandatory": true },
   { "name": "platform",       "value": "github", "constant": true }
 ]
 ```
 
-| Field      | Description |
-|------------|-------------|
-| `name`     | Key in the extracted dictionary |
-| `value`    | Dot-separated JSON path into the payload, **or** a literal when `constant` is `true` |
-| `constant` | *(optional, default `false`)* When `true`, `value` is used as-is instead of resolving a path |
+| Field       | Description |
+|-------------|-------------|
+| `name`      | Key in the extracted dictionary |
+| `value`     | Dot-separated JSON path into the payload, **or** a literal when `constant` is `true` |
+| `constant`  | *(optional, default `false`)* When `true`, `value` is used as-is instead of resolving a path |
+| `mandatory` | *(optional, default `false`)* When `true`, the execution block is **skipped** if this input resolves to `null`, an empty string, or a whitespace-only string |
+
+When a mandatory input fails, the execution block is skipped with a clear error message listing which inputs were missing. Other execution blocks in the same rule set are still evaluated — a single missing mandatory input does not abort the entire webhook.
 
 ### Path Resolution Examples
 
@@ -303,7 +344,7 @@ Given:
 | `"value": "github", "constant": true` | `"github"` (literal) |
 | `"value": "resource.revision.fields.\"System.Title\""` (path uses a quoted segment for a dotted key) | Azure DevOps work item `System.Title` |
 
-If a path does not resolve (missing property), the input is set to `null`.
+If a path does not resolve (missing property), the input is set to `null`. If the input is marked `"mandatory": true`, the entire execution block is skipped instead.
 
 ---
 
@@ -412,8 +453,8 @@ A rule set with one execution that reviews newly opened GitHub pull requests:
           { "name": "pr-opened-event", "rule": "action==opened" }
         ],
         "use-inputs": [
-          { "name": "pr-number",       "value": "number" },
-          { "name": "repository-url",  "value": "repository.clone_url" },
+          { "name": "pr-number",       "value": "number",                "mandatory": true },
+          { "name": "repository-url",  "value": "repository.clone_url", "mandatory": true },
           { "name": "repository-name", "value": "repository.full_name" },
           { "name": "pr-title",        "value": "pull_request.title" },
           { "name": "pr-head-branch",  "value": "pull_request.head.ref" },

@@ -79,4 +79,78 @@ claude --plugin-dir /path/to/xianix-plugins-official/plugins/req-analyst
 /requirement-analysis 42
 ```
 
-Or trigger it via the Xianix Agent using a webhook rule that fires on new issues — see the [Rules Configuration](/agent-configuration/rules/) guide.
+Or trigger it automatically via the Xianix Agent by adding a rule — see the examples below and the [Rules Configuration](/agent-configuration/rules/) guide.
+
+---
+
+## Rule Examples
+
+Add one (or both) of the execution blocks below to your `rules.json` so the Xianix Agent automatically grooms backlog items when a webhook fires.
+
+### When does the agent trigger?
+
+| Platform | Scenario | Webhook event | Filter rule |
+|---|---|---|---|
+| GitHub | Issue assigned to agent | `issues` | `action==assigned` and `assignee.login` is `xianix-agent` |
+| Azure DevOps | Work item assigned to agent in "To Do" state | `workitem.updated` | `System.AssignedTo` changed to `xianix-agent` and state is `To Do` |
+
+### GitHub
+
+```json
+{
+  "name": "github-issue-requirement-analysis",
+  "match-any": [
+    {
+      "name": "github-issue-assigned-to-agent",
+      "rule": "action==assigned&&assignee.login=='xianix-agent'"
+    }
+  ],
+  "use-inputs": [
+    { "name": "issue-number",    "value": "issue.number" },
+    { "name": "repository-url",  "value": "repository.clone_url" },
+    { "name": "repository-name", "value": "repository.full_name" },
+    { "name": "issue-title",     "value": "issue.title" },
+    { "name": "platform",        "value": "github", "constant": true }
+  ],
+  "use-plugins": [
+    {
+      "plugin-name": "req-analyst@xianix-plugins-official",
+      "marketplace": "xianix-team/plugins-official"
+    }
+  ],
+  "execute-prompt": "Issue #{{issue-number}} titled \"{{issue-title}}\" in the repository {{repository-name}} has been assigned to xianix-agent for requirement analysis.\n\nRun /requirement-analysis {{issue-number}} to perform the automated requirement analysis and elaboration."
+}
+```
+
+### Azure DevOps
+
+```json
+{
+  "name": "azuredevops-work-item-requirement-analysis",
+  "match-any": [
+    {
+      "name": "azuredevops-workitem-assigned-to-agent",
+      "rule": "eventType==workitem.updated&&resource.fields.\"System.AssignedTo\".newValue=='xianix-agent <xianix-agent@99x.io>'&&resource.revision.fields.\"System.State\"=='To Do'"
+    }
+  ],
+  "use-inputs": [
+    { "name": "workitem-id",     "value": "resource.workItemId" },
+    { "name": "workitem-title",  "value": "resource.revision.fields.\"System.Title\"" },
+    { "name": "workitem-type",   "value": "resource.revision.fields.\"System.WorkItemType\"" },
+    { "name": "project-name",    "value": "resource.revision.fields.\"System.TeamProject\"" },
+    { "name": "repository-url",  "value": "https://org@dev.azure.com/org/Project/_git/Repo", "constant": true },
+    { "name": "platform",        "value": "azuredevops", "constant": true }
+  ],
+  "use-plugins": [
+    {
+      "plugin-name": "req-analyst@xianix-plugins-official",
+      "marketplace": "xianix-team/plugins-official"
+    }
+  ],
+  "execute-prompt": "Work item ({{workitem-type}}) #{{workitem-id}} titled \"{{workitem-title}}\" in project {{project-name}} has been assigned to xianix-agent for requirement analysis.\n\nRun /requirement-analysis {{workitem-id}} to perform the automated requirement analysis and elaboration."
+}
+```
+
+:::note
+These blocks go inside the `executions` array of a rule set. See [Rules Configuration](/agent-configuration/rules/) for the full file structure and filter syntax.
+:::

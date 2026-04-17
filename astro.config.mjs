@@ -61,6 +61,7 @@ export default defineConfig({
 			{
 				label: 'Official Plugins',
 				items: [
+					{ label: 'Agent Team', slug: 'official-plugins/agent-team' },
 					{ label: 'Marketplace Overview', slug: 'official-plugins/overview' },
 					{ label: 'PR Reviewer', slug: 'official-plugins/pr-reviewer' },
 					{ label: 'Requirement Analyst', slug: 'official-plugins/req-analyst' },
