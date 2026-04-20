@@ -68,8 +68,10 @@ export default defineConfig({
 					{ label: 'Issue Lifecycle', slug: 'official-plugins/issue-lifecycle' },
 					{ label: 'PR Lifecycle', slug: 'official-plugins/pr-lifecycle' },
 					{ label: 'PR Reviewer', slug: 'official-plugins/pr-reviewer' },
+					{ label: 'Document Updater', slug: 'official-plugins/doc-writer' },
 					{ label: 'Requirement Analyst', slug: 'official-plugins/req-analyst' },
 					{ label: 'Test Strategist', slug: 'official-plugins/tc-generator' },
+					{ label: 'Package Dependency Upgrade Agent', slug: 'official-plugins/package-dependency-upgrade-agent' },
 				],
 			},
 				{
