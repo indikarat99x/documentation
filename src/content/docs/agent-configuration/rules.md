@@ -26,9 +26,15 @@ In the **the-agent** reference implementation, the default file is `Knowledge/ru
     "executions": [
       {
         "name": "...",
-        "match-any": [ ... ],
+        "platform": "...",
+        "repository": {
+          "url": "...",
+          "ref": "..."
+        },
+        "match-any":  [ ... ],
         "use-inputs": [ ... ],
-        "use-plugins": [ ... ],
+        "use-plugins":[ ... ],
+        "with-envs":  [ ... ],
         "execute-prompt": "..."
       }
     ]
@@ -40,6 +46,9 @@ In the **the-agent** reference implementation, the default file is `Knowledge/ru
 |-------|-------------|
 | `webhook` | Webhook name from Xians Agent Studio (must match incoming events) |
 | `executions` | One or more execution blocks; optional per-block `name` for logs and skip messages |
+| `platform` *(per execution, optional)* | Hosting service the run targets (`github`, `azuredevops`, …). Structural — describes *where* the run happens, independent of the plugin. See [§ 1b](#1b-platform--repository--structural-execution-context). |
+| `repository` *(per execution, optional)* | Structural binding for the repository being operated on. Each declared sub-field (`url`, `ref`) accepts either a JSON path (resolved against the payload) or a constant via `{ "value": "...", "constant": true }`. Auto-resolved values are exposed to plugins as `{{repository-url}}` / `{{repository-name}}` / `{{git-ref}}`; **`{{repository-name}}` is derived from `url`, never authored**. Omit the whole block for executions that don't operate on a repo. See [§ 1b](#1b-platform--repository--structural-execution-context). |
+| `with-envs` *(per execution, optional)* | Container env vars injected before the prompt runs. Each entry **must** declare its source explicitly: `secrets.KEY` (tenant Secret Vault), `host.NAME` (agent process env), or a literal with `"constant": true`. Bare names and unknown prefixes fail the activation. See [§ 5](#5-with-envs--container-environment-variables). |
 
 Each execution block that passes its `match-any` filters is scheduled independently when multiple blocks match the same payload.
 
@@ -90,6 +99,72 @@ Case-insensitive match against the webhook name configured in Xians Agent Studio
 ```
 
 Only one rule set per webhook name is used — the **first** matching entry in the `rules.json` array wins.
+
+---
+
+## 1b. `platform` & `repository` — Structural Execution Context
+
+These two execution-level fields describe **what the run operates on** — independent of which plugin is used. They sit alongside `match-any` / `use-inputs` / `use-plugins` and are resolved before any plugin runs. The framework uses them directly (credential setup, workspace volume, worktree checkout, chat-side input resolution) **and** auto-injects the resolved values into `XIANIX_INPUTS` under canonical kebab-case keys, so plugin prompts and the executor entrypoint can read them off the same keys they always have.
+
+```json
+"platform": "github",
+"repository": {
+  "url": "repository.clone_url",
+  "ref": "pull_request.head.ref"
+}
+```
+
+| Field             | Type                                                               | Description |
+|-------------------|--------------------------------------------------------------------|-------------|
+| `platform`        | string literal                                                     | Hosting service (`github`, `azuredevops`, …). Used by the executor to pick the right `git` credential helper and is exposed to plugin prompts as `{{platform}}`. Empty / omitted means the executor will infer from the repo URL (defaults to `github`). |
+| `repository.url`  | string (JSON path) **or** `{ value, constant }` object             | Either a JSON path that resolves to the clone URL (the common webhook-driven case) or a hard-coded literal via the constant form (see [Hard-coding the repository](#hard-coding-the-repository-constant-form)). **Mandatory when declared** — if a declared JSON path doesn't resolve, the execution block is skipped before any container starts. Exposed as `{{repository-url}}`. |
+| `repository.ref`  | string (JSON path) **or** `{ value, constant }` object             | Either a JSON path that resolves to the git ref (branch, commit SHA, or tag), or a constant pinning the run to a fixed branch/tag. **Mandatory when declared.** Omit entirely to run against the bare-clone HEAD. Exposed as `{{git-ref}}` and used directly by `Executor/entrypoint.sh` to position the worktree before the prompt runs. |
+
+> **`{{repository-name}}` is derived, not declared.** A short `owner/repo`-style identifier is computed from the resolved `repository.url` (platform-aware: GitHub, Azure DevOps `_git` URLs, etc.) and auto-injected as `{{repository-name}}`. There is no `repository.name` knob in the schema — clone URL and display name are kept in lockstep so they can never drift. If you need a different display name, pick a different clone URL.
+
+#### Hard-coding the repository (constant form)
+
+For runs whose repository or ref is fixed regardless of the webhook payload — cron pings, Slack triggers, single-tenant agents pinned to one repo, manual triggers — wrap the value in `{ "value": "...", "constant": true }`:
+
+```json
+"repository": {
+  "url": { "value": "https://github.com/my-org/agent-target.git", "constant": true },
+  "ref": { "value": "main",                                          "constant": true }
+}
+```
+
+The bare-string shorthand (`"url": "repository.clone_url"`) is just sugar for `{ "value": "repository.clone_url", "constant": false }`, so existing rules need no changes. Mixed forms also fall out naturally — clone a fixed mirror but check out whatever ref the webhook says:
+
+```json
+"repository": {
+  "url": { "value": "https://github.com/my-org/mirror.git", "constant": true },
+  "ref": "pull_request.head.ref"
+}
+```
+
+Constant URLs of course also drive `{{repository-name}}` — the derivation runs on the resolved URL regardless of how it was supplied.
+
+### Why are these separate from `use-inputs`?
+
+- They are **structural** — every webhook-triggered run on a repo needs them, regardless of plugin. Promoting them to execution-level removes per-plugin duplication and makes the contract explicit.
+- The framework needs them **before** the plugin loop runs (clone target, credential helper, volume name, worktree ref) — they were already special-cased; now the schema reflects that.
+- `repository.ref` is part of the *binding* (which repo, at which ref), not a free-form input the prompt happens to use — nesting it next to `url` keeps that relationship obvious.
+- The chat-driven path (`SupervisorSubagentTools.RunClaudeCodeOnRepository`) treats `RepositoryUrl` / `RepositoryName` as first-class typed fields and derives the display name from the URL the same way the webhook path does. Aligning the webhook schema removes a subtle divergence.
+- Executions that don't operate on a repo (e.g. Azure DevOps work-item analysis) just **omit** the `repository` block — no need for `mandatory: false` ceremony on per-plugin inputs.
+
+### Wire-format
+
+Plugin prompts and `Executor/entrypoint.sh` always read structural values from these canonical `XIANIX_INPUTS` keys (`platform`, `repository-url`, `repository-name`, `git-ref`). The agent serialises the resolved structural values into the inputs dict under exactly these keys — they are **not** authored under `use-inputs` and the same key names are not used for anything else. `repository-name` is the derived value (from `repository.url`), not a separate path.
+
+### Mandatory semantics
+
+The structural fields use the **same skip-on-missing behaviour** as a `use-inputs` entry with `"mandatory": true`:
+
+- If a declared sub-field uses the **JSON-path** form (`"url": "repository.clone_url"`) and the path doesn't resolve, the block is skipped with a clear error and no executor container starts.
+- The **constant** form (`{ "value": "...", "constant": true }`) skips the resolution check entirely — the literal is taken verbatim, so a constant binding can't fail mid-flight. An empty constant value (`{ "value": "", "constant": true }`) is treated as "field undeclared" rather than "field set to empty" — that's an authoring mistake the framework refuses to silently propagate.
+- Other execution blocks in the same rule set are still evaluated — the failure is per-block.
+- `platform` is a literal so it always "resolves" — there's nothing to fail.
+- `repository-name` is derived from `repository.url` and never fails on its own — if the URL is unparseable the raw URL flows through as the display name so logs stay useful.
 
 ---
 
@@ -307,11 +382,12 @@ Check whether a field is present (and non-null) in the payload — useful for op
 
 Extracts values from the webhook payload into named variables. They are used for `execute-prompt` interpolation and are forwarded to the executor (for example as `XIANIX_INPUTS`).
 
+> **Don't put structural context here.** `platform`, `repository-url`, `repository-name`, and `git-ref` are declared at the [execution level](#1b-platform--repository--structural-execution-context) and auto-injected into `XIANIX_INPUTS` for you. Authoring them under `use-inputs` is unsupported — the framework uses the structural fields for credential setup, volume management, worktree checkout, and chat-side input validation.
+
 ```json
 "use-inputs": [
-  { "name": "pr-number",      "value": "number" },
-  { "name": "repository-url", "value": "repository.clone_url", "mandatory": true },
-  { "name": "platform",       "value": "github", "constant": true }
+  { "name": "pr-number", "value": "number",             "mandatory": true },
+  { "name": "pr-title",  "value": "pull_request.title" }
 ]
 ```
 
@@ -339,10 +415,12 @@ Given:
 | Input definition | Resolved value |
 |------------------|----------------|
 | `"value": "number"` | `42` |
-| `"value": "repository.clone_url"` | `"https://github.com/acme/app.git"` |
 | `"value": "pull_request.head.ref"` | `"fix/auth"` |
-| `"value": "github", "constant": true` | `"github"` (literal) |
+| `"value": "pull_request.title"` | `"Fix auth bug"` |
+| `"value": "high", "constant": true` | `"high"` (literal) |
 | `"value": "resource.revision.fields.\"System.Title\""` (path uses a quoted segment for a dotted key) | Azure DevOps work item `System.Title` |
+
+> Need the clone URL, repo name, platform, or checked-out ref in your prompt? Reference `{{repository-url}}`, `{{repository-name}}`, `{{platform}}`, or `{{git-ref}}` directly — they're auto-injected from the [structural fields](#1b-platform--repository--structural-execution-context).
 
 If a path does not resolve (missing property), the input is set to `null`. If the input is marked `"mandatory": true`, the entire execution block is skipped instead.
 
@@ -356,10 +434,7 @@ Declares Claude Code marketplace plugins to install in the executor container be
 "use-plugins": [
   {
     "plugin-name": "pr-reviewer@xianix-plugins-official",
-    "marketplace": "xianix-team/plugins-official",
-    "envs": [
-      { "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB_TOKEN" }
-    ]
+    "marketplace": "xianix-team/plugins-official"
   }
 ]
 ```
@@ -368,47 +443,109 @@ Declares Claude Code marketplace plugins to install in the executor container be
 |-----------------|----------|-------------|
 | `plugin-name`   | Yes | Plugin reference in `plugin-name@marketplace-name` form, passed to `claude plugin install` |
 | `marketplace`   | No  | Marketplace source (`owner/repo`, git URL, path, or `marketplace.json` URL). Omit for the built-in Anthropic marketplace. |
-| `envs`          | No  | Environment variable mappings for this plugin — see below |
 
-### Plugin Environment Variables (`envs`)
+> **Heads-up** — credentials a plugin needs (GitHub PAT, Azure DevOps PAT, third-party API keys) are **not** declared per-plugin. They live at the execution-block level in [`with-envs`](#5-with-envs--container-environment-variables) so a single value like `GITHUB-TOKEN` only has to be written once even when multiple plugins consume it.
 
-The executor container already has a set of variables injected automatically before any plugin runs. The `envs` array lets you **remap or supplement** those variables — the most common reason is that a Claude Code plugin expects a different variable name than the one already present in the container.
+---
+
+## 5. `with-envs` — Container Environment Variables
+
+Declares environment variables to inject into the executor container before the prompt runs. Sits at the **execution-block** level (sibling to `use-plugins`) — every variable is available to every plugin and to the prompt itself, regardless of how many plugins consume it.
+
+```json
+"with-envs": [
+  { "name": "GITHUB-TOKEN",       "value": "secrets.GITHUB-TOKEN", "mandatory": true },
+  { "name": "REVIEW_MODE",        "value": "strict",               "constant": true }
+]
+```
+
+The executor container already has a small set of agent-managed variables present before any plugin runs. `with-envs` lets you **add** to that set — for tenant credentials, plugin configuration flags, or any value the prompt or its plugins need.
 
 #### Variables automatically present in the container
 
-These are always injected by the agent runtime and do not need to be declared in `envs`:
+The only variable seeded into every container from the agent host is:
 
 | Variable              | Description |
 |-----------------------|-------------|
-| `ANTHROPIC_API_KEY`   | Anthropic API key (read directly by the Claude Code SDK) |
-| `GITHUB_TOKEN`        | GitHub personal access token — set via `GITHUB_TOKEN` (or `<TENANT>_GITHUB_TOKEN`) in the agent's `.env` |
-| `AZURE_DEVOPS_TOKEN`  | Azure DevOps personal access token — set via `AZURE_DEVOPS_TOKEN` (or `<TENANT>_AZURE_DEVOPS_TOKEN`) in `.env` |
+| `ANTHROPIC_API_KEY`   | Anthropic API key (read directly by the Claude Code SDK). Set via `ANTHROPIC-API-KEY` in the agent's `.env` — same value for every tenant. |
 
-#### Why `envs` is needed: renaming for plugins
-
-Claude Code plugins often expect a specific variable name that differs from the one already in the container. Use `envs` to expose the existing value under the name the plugin requires:
+CM platform tokens (`GITHUB-TOKEN`, `AZURE-DEVOPS-TOKEN`, …) are **not** read from the agent host. Each tenant must store their own in the **Xians Secret Vault** and declare them in `rules.json` via `with-envs`:
 
 ```json
-{ "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB_TOKEN" }
+"with-envs": [
+  { "name": "GITHUB-TOKEN",       "value": "secrets.GITHUB-TOKEN",       "mandatory": true },
+  { "name": "AZURE-DEVOPS-TOKEN", "value": "secrets.AZURE-DEVOPS-TOKEN", "mandatory": true }
+]
 ```
 
-This reads `GITHUB_TOKEN` from the host environment and makes it available as `GITHUB_PERSONAL_ACCESS_TOKEN` inside the container — so the plugin can find it without any changes to the agent's credential configuration.
+This guarantees that two tenants never share the same platform credential — a tenant whose vault is missing the secret fails fast (when paired with `mandatory: true`) instead of silently borrowing a host-wide token.
 
-#### `env.` reference syntax
+#### Renaming a value for a plugin
 
-By default, `value` is treated as an `env.VAR_NAME` reference. The `env.` prefix is stripped and the named variable is read from the **host** (agent process) environment. Any variable defined in the agent's `.env` file can be referenced this way:
+Some Claude Code plugins expect a specific variable name that differs from the credential's canonical name. Use `with-envs` to expose the value under the name the plugin requires — the lookup form (`secrets.*`, `host.*`, or constant) determines where the value comes from, while `name` controls how the container sees it:
 
 ```json
-{ "name": "MY_PLUGIN_TOKEN",    "value": "env.GITHUB_TOKEN" }
-{ "name": "AZURE_PAT",          "value": "env.AZURE_DEVOPS_TOKEN" }
-{ "name": "CUSTOM_SERVICE_KEY", "value": "env.MY_CUSTOM_API_KEY" }
+{ "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "secrets.GITHUB-TOKEN" }
 ```
 
-If the referenced variable is not set on the host, the injected value will be an empty string.
+This fetches `GITHUB-TOKEN` from the tenant Secret Vault and makes it available as `GITHUB_PERSONAL_ACCESS_TOKEN` inside the container — so the plugin can find it without any changes to how the credential is stored.
+
+#### Three value forms at a glance
+
+The `value` field supports three resolution forms — every entry **must** pick one explicitly. Bare names and unrecognised prefixes (including the legacy `env.X`) fail the activation with a non-retryable error so a typo can never silently leak a host env var into the container:
+
+| Form                  | Resolved from                                              | When to use |
+|-----------------------|------------------------------------------------------------|-------------|
+| `host.VAR_NAME`       | Agent process environment (`.env` file / host env vars)    | Genuinely host-wide settings that are the same for every tenant (e.g. `ANTHROPIC-API-KEY`, deployment knobs) |
+| `secrets.SECRET-KEY`  | **Tenant-scoped Xians Secret Vault** (encrypted at rest)   | Per-tenant credentials — GitHub PAT, Azure DevOps PAT, third-party API keys. The recommended (and only) place for credentials that differ per tenant. |
+| Literal + `"constant": true` | The string is used verbatim                         | Plugin flags, region identifiers, public URLs, anything that isn't a credential |
+
+#### `host.` reference syntax
+
+Prefix the value with `host.` to read a variable from the **agent host** (the agent process environment, populated from the agent's `.env` file or whatever the deployment exports). The `host.` prefix is stripped and the remainder is the variable name to look up:
+
+```json
+{ "name": "MY_PLUGIN_TOKEN",    "value": "host.GITHUB_TOKEN" }
+{ "name": "AZURE_PAT",          "value": "host.AZURE_DEVOPS_TOKEN" }
+{ "name": "CUSTOM_SERVICE_KEY", "value": "host.MY_CUSTOM_API_KEY" }
+```
+
+If the referenced variable is not set on the host, the injected value will be an empty string. Combine with `"mandatory": true` to fail-fast instead.
+
+> **Use `host.*` sparingly.** Anything tenant-specific belongs in the Secret Vault (`secrets.*`) — `host.*` is for values that are genuinely the same for every tenant on the agent.
+
+#### `secrets.` reference syntax
+
+Prefix the value with `secrets.` to fetch the credential from the **tenant-scoped Xians Secret Vault** at container-start time. The `secrets.` prefix is stripped and the remainder is treated as the secret **key** to look up in the active tenant's vault:
+
+```json
+{ "name": "GITHUB-TOKEN",          "value": "secrets.GITHUB-TOKEN",          "mandatory": true }
+{ "name": "OPENAI_API_KEY",        "value": "secrets.openai-api-key",        "mandatory": true }
+{ "name": "STRIPE_WEBHOOK_SECRET", "value": "secrets.stripe-webhook-secret" }
+```
+
+Under the hood, the agent runs the equivalent of:
+
+```csharp
+var vault   = XiansContext.CurrentAgent.Secrets.TenantScope();
+var fetched = await vault.FetchByKeyAsync("GITHUB-TOKEN");
+// fetched.Value is injected as the named env var inside the container.
+```
+
+Resolution rules:
+
+- **Tenant scope is automatic.** The lookup is bound to the tenant that owns the inbound webhook — different tenants can store different values under the same key without colliding.
+- **Encrypted at rest.** Values are stored AES-256-GCM-encrypted server-side; the agent only ever sees the decrypted plaintext in memory while building the container env.
+- **No host-level fallback for platform credentials.** The agent host's `.env` no longer provides `GITHUB-TOKEN` / `AZURE-DEVOPS-TOKEN` — these *must* live in each tenant's vault, so a misconfigured tenant can never silently borrow another tenant's PAT.
+- **Missing or empty secret** → the value resolves to an empty string. Combine with `"mandatory": true` (see below) to fail-fast instead of starting the container with a blank credential.
+- **Vault errors are non-fatal** unless the entry is also `mandatory` — they are logged and the resolved value is empty.
+- **Rotation is hot.** Updating a secret in the vault takes effect on the **next** container start; no agent restart or redeploy is required.
+
+Manage the underlying secrets through the Xians Secret Vault (Agent API at `api/agent/secrets`, or any UI/CLI built on top of it) — supports create, list, update, and delete with strict per-tenant scope enforcement.
 
 #### Constant values
 
-Set `"constant": true` to inject a fixed literal string rather than resolving a host variable. This is useful for plugin configuration flags, region identifiers, or any value that does not come from the environment:
+Set `"constant": true` to inject a fixed literal string rather than resolving a host variable or a vault secret. This is useful for plugin configuration flags, region identifiers, or any value that does not come from the environment:
 
 ```json
 { "name": "REVIEW_MODE",    "value": "strict",    "constant": true }
@@ -416,22 +553,33 @@ Set `"constant": true` to inject a fixed literal string rather than resolving a 
 { "name": "AZURE_ORG_URL",  "value": "https://dev.azure.com/my-org", "constant": true }
 ```
 
+#### Mandatory entries
+
+Set `"mandatory": true` to make the executor container **fail to start** (non-retryably) when the resolved value is `null` or empty. This is the recommended pattern for any secret the prompt cannot run without:
+
+```json
+{ "name": "GITHUB-TOKEN", "value": "secrets.GITHUB-TOKEN", "mandatory": true }
+```
+
+The error message lists which env vars were missing and where to set them — the tenant Secret Vault for `secrets.*` entries, or the agent host `.env` for `host.*` entries.
+
 #### Field reference
 
-| Field      | Description |
-|------------|-------------|
-| `name`     | Name of the environment variable as it will appear inside the container |
-| `value`    | `env.VAR_NAME` to read from the host environment, or a literal string when `constant` is `true` |
-| `constant` | *(optional, default `false`)* When `true`, `value` is used as-is without any host variable lookup |
+| Field       | Description |
+|-------------|-------------|
+| `name`      | Name of the environment variable as it will appear inside the container |
+| `value`     | Must use one of three explicit forms: `host.VAR_NAME` (read from the agent host environment), `secrets.SECRET-KEY` (read from the tenant Secret Vault), or a literal string when `constant` is `true`. Bare names and unrecognised prefixes (including the legacy `env.X`) fail the activation with a non-retryable error. |
+| `constant`  | *(optional, default `false`)* When `true`, `value` is used as-is without any host or vault lookup |
+| `mandatory` | *(optional, default `false`)* When `true`, the executor container fails to start (non-retryable) if the resolved value is `null` or empty |
 
 ---
 
-## 5. `execute-prompt` — Claude Code Prompt Template
+## 6. `execute-prompt` — Claude Code Prompt Template
 
 A string template run as the Claude Code prompt after plugins are installed. Use `{{input-name}}` placeholders for resolved `use-inputs` values.
 
 ```json
-"execute-prompt": "You are reviewing PR #{{pr-number}} titled \"{{pr-title}}\" in {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review."
+"execute-prompt": "You are reviewing PR #{{pr-number}} titled \"{{pr-title}}\" in {{repository-name}} (branch: {{git-ref}}).\n\nRun /code-review to perform the automated review."
 ```
 
 Placeholders are replaced case-insensitively. Any `{{name}}` with no matching input is left unchanged.
@@ -449,27 +597,63 @@ A rule set with one execution that reviews newly opened GitHub pull requests:
     "executions": [
       {
         "name": "github-pull-request-review",
+        "platform": "github",
+        "repository": {
+          "url": "repository.clone_url",
+          "ref": "pull_request.head.ref"
+        },
         "match-any": [
           { "name": "pr-opened-event", "rule": "action==opened" }
         ],
         "use-inputs": [
-          { "name": "pr-number",       "value": "number",                "mandatory": true },
-          { "name": "repository-url",  "value": "repository.clone_url", "mandatory": true },
-          { "name": "repository-name", "value": "repository.full_name" },
-          { "name": "pr-title",        "value": "pull_request.title" },
-          { "name": "pr-head-branch",  "value": "pull_request.head.ref" },
-          { "name": "platform",        "value": "github", "constant": true }
+          { "name": "pr-number", "value": "number",             "mandatory": true },
+          { "name": "pr-title",  "value": "pull_request.title" }
         ],
         "use-plugins": [
           {
             "plugin-name": "pr-reviewer@xianix-plugins-official",
-            "marketplace": "xianix-team/plugins-official",
-            "envs": [
-              { "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB_TOKEN" }
-            ]
+            "marketplace": "xianix-team/plugins-official"
           }
         ],
-        "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{pr-head-branch}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
+        "with-envs": [
+          { "name": "GITHUB-TOKEN", "value": "secrets.GITHUB-TOKEN", "mandatory": true }
+        ],
+        "execute-prompt": "You are reviewing pull request #{{pr-number}} titled \"{{pr-title}}\" in the repository {{repository-name}} (branch: {{git-ref}}).\n\nRun /code-review to perform the automated review. The `gh` CLI is authenticated and available if you need it directly."
+      }
+    ]
+  }
+]
+```
+
+### Work-item example (no repository)
+
+Executions that don't operate on a repo simply omit the `repository` block. `platform` can still be set to drive credential resolution:
+
+```json
+[
+  {
+    "webhook": "Default",
+    "executions": [
+      {
+        "name": "azuredevops-workitem-triage",
+        "platform": "azuredevops",
+        "match-any": [
+          { "name": "workitem-created", "rule": "eventType==workitem.created" }
+        ],
+        "use-inputs": [
+          { "name": "workitem-id",    "value": "resource.id",                                  "mandatory": true },
+          { "name": "workitem-title", "value": "resource.fields.\"System.Title\"" }
+        ],
+        "use-plugins": [
+          {
+            "plugin-name": "workitem-triage@xianix-plugins-official",
+            "marketplace": "xianix-team/plugins-official"
+          }
+        ],
+        "with-envs": [
+          { "name": "AZURE-DEVOPS-TOKEN", "value": "secrets.AZURE-DEVOPS-TOKEN", "mandatory": true }
+        ],
+        "execute-prompt": "Triage Azure DevOps work item #{{workitem-id}}: \"{{workitem-title}}\". Run /workitem-triage to suggest area path, iteration, and labels."
       }
     ]
   }
@@ -516,6 +700,8 @@ Only run the workflow for pull requests targeting a `release/` branch:
 
 1. A webhook fires with a name that matches `webhook` (e.g. `"Default"`).
 2. For each execution block, if `match-any` is non-empty, at least one `rule` must pass.
-3. `use-inputs` are resolved from the payload.
-4. `execute-prompt` is interpolated with those inputs.
-5. The executor installs `use-plugins`, applies `envs`, and runs the final prompt.
+3. **Structural fields are resolved first** — `platform`, `repository.url`, `repository.ref`. JSON-path bindings are looked up against the payload; constant bindings (`{ "value": "...", "constant": true }`) are taken verbatim. If a declared *path* doesn't resolve, the block is skipped — constants never fail to resolve.
+4. `use-inputs` are resolved from the payload, and the resolved structural values are auto-injected back into the inputs dict under the canonical keys `platform` / `repository-url` / `git-ref`. The short `repository-name` (e.g. `owner/repo`) is **derived** from `repository-url` (platform-aware: handles GitHub, Azure DevOps `_git` URLs, etc.) and injected alongside them so prompts and plugins see a single combined view.
+5. `execute-prompt` is interpolated with those inputs (including the auto-injected structural values).
+6. The agent resolves `with-envs` (literals, `host.*`, `secrets.*`) and injects them into the executor container alongside the runtime values it manages itself (`ANTHROPIC_API_KEY`, etc.).
+7. The executor installs `use-plugins`, `git checkout`s `git-ref` into the per-run worktree (or runs against the bare-clone HEAD when omitted), and runs the final prompt.
