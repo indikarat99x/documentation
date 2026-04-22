@@ -197,7 +197,7 @@ For example, given this rule configuration:
       "plugin-name": "pr-reviewer@xianix-plugins-official",
       "marketplace": "xianix-team/plugins-official",
       "envs": [
-        { "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "env.GITHUB_TOKEN" }
+        { "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "value": "host.GITHUB_TOKEN" }
       ]
     }
   ]
