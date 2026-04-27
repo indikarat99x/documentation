@@ -70,14 +70,31 @@ The platform is **auto-detected** from `git remote`. Scope hints are optional; i
 
 ### Scope hint format
 
-Add any of the following on their own line in the issue or work item body:
+Hints are picked up from any line in the issue or work item body that starts with `Scope:` or `Target:`. Every other line is treated as plain context the agent reads but the parser ignores. Both hints are optional and independent — use whichever combination matches what you know.
+
+**Typical — describe the problem and add hints:**
+
+```text
+Our /checkout and /orders endpoints feel slow under peak load.
+Scope: src/api, src/services
+Target: api
+```
+
+**Minimal — hints only, no prose:**
 
 ```text
 Scope: src/services, src/workers
 Target: api
 ```
 
-Multiple comma-separated paths are supported. Paths are matched as globs relative to the repository root.
+**Partial — one hint only:**
+
+```text
+The dashboard feels janky when many widgets are mounted.
+Target: frontend
+```
+
+`Scope:` accepts a single path or a comma-separated list, matched as globs relative to the repository root. `Target:` accepts `api`, `worker`, `frontend`, or `data`.
 
 ---
 
